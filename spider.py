@@ -1,16 +1,19 @@
 import requests
 from requests_html import AsyncHTMLSession
-from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logger
-from typing import Awaitable
 from asyncio import sleep
-from urllib.parse import urljoin
-
+from urllib.parse import urljoin, urlparse
+from collections import namedtuple
+from models import Page
 session = None
 USER_AGENT = "spider@monkefun"
 BASE_HEADERS = headers = {"User-Agent": USER_AGENT}
+
+
+def normalize_url(url: str):
+    return url.rstrip("/")
 
 
 def load_page_link_data(link: str, source_host: str, source_url: str):
@@ -30,22 +33,25 @@ def load_page_link_data(link: str, source_host: str, source_url: str):
 
 
 async def get_page_links(source_url: str, session: AsyncHTMLSession):
+    PageLinksData = namedtuple("PageLinksData", ["status", "links"])
     logger.debug(f"Getting {source_url}")
     sitesession = await session.get(source_url, headers=BASE_HEADERS)
     siteheaders = sitesession.headers
     content_type = siteheaders["content-type"]
     if "text/html" not in content_type:
         logger.debug(f"Page {source_url} is not an html page, skipping..")
-        return []
-    logger.info(f"Rendering {source_url}")
+        return None
     await sitesession.html.arender(timeout=60)
-    return sitesession.html.absolute_links
+    normal_links = [normalize_url(link)
+                    for link in sitesession.html.absolute_links]
+    return Page(url=source_url, status=sitesession.status_code, links=normal_links)
 
 
 async def crawl_page_links(source_url: str, session: AsyncHTMLSession):
     treated = []
     source_parsed = urlparse(source_url)
-    links = await get_page_links(source_url, session)
+    response = await get_page_links(source_url, session)
+    links = response.links
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(
             load_page_link_data, link, source_parsed.netloc, source_url): link for link in links}
@@ -58,64 +64,73 @@ async def crawl_page_links(source_url: str, session: AsyncHTMLSession):
                 logger.error(f"Failed processing for {target_url}")
     return treated
 
-
+CrawledPage = namedtuple("CrawledPage", ["pageUrl", "status", "links"])
 class WebCrawler:
     def __init__(self, website: str, limit: int, base_interval: float):
-        self.__website_url = website
-        self.__robots_path = urljoin(self.__website_url, "/robots.txt")
-        self.__queue = [self.__robots_path, self.__website_url]
-        self.__handled = []
-        self.__counter = 0
-        self.__limit = limit
-        self.__interval = base_interval
-        self.__web_session = AsyncHTMLSession()
-        self.__robots_data = None
+        self._website_url = normalize_url(website)
+        self._robots_path = urljoin(self._website_url, "/robots.txt")
+        self._queue = [self._robots_path, self._website_url]
+        self._handled = []
+        self._counter = 0
+        self._limit = limit
+        self._interval = base_interval
+        self._web_session = AsyncHTMLSession()
+        self._robots_data = None
 
     async def load_more_links(self, from_page: str):
-        links = await get_page_links(from_page, self.__web_session)
+        page = await get_page_links(from_page, self._web_session)
+        if page is None:
+            return None
+        links = page.links
+        queued_urls = self._queue
         new_links = [
-            link for link in links if link not in self.__queue + self.__handled]
-        self.__queue.extend(new_links)
+            link for link in links if link not in queued_urls + self._handled and urlparse(link).netloc == page.domain]
+        self._queue.extend(new_links)
+        return page
 
     def __aiter__(self):
         return self
 
     def load_robots_txt(self):
-        parser = RobotFileParser(self.__robots_path)
+        parser = RobotFileParser(self._robots_path)
         parser.read()
-        self.__robots_data = parser
+        self._robots_data = parser
 
     @property
     def crawl_delay(self):
-        if self.__robots_data is None:
-            return self.__interval
-        return self.__interval + (self.__robots_data.crawl_delay(USER_AGENT) or 0)
+        if self._robots_data is None:
+            return self._interval
+        return self._interval + (self._robots_data.crawl_delay(USER_AGENT) or 0)
+
+    def crawl_allowed(self, page: str):
+        return self._robots_data.can_fetch(USER_AGENT, page)
 
     async def __anext__(self):
-        if len(self.__queue) == 0 or self.__counter == self.__limit:
+        if len(self._queue) == 0 or self._counter == self._limit:
             raise StopAsyncIteration
 
-        curr = self.__queue.pop(0)
+        curr = self._queue.pop(0)
 
-        if self.__robots_data is not None and not self.__robots_data.can_fetch(USER_AGENT, curr):
+        if self._robots_data is not None and not self.crawl_allowed(curr):
             logger.info(
                 f"{USER_AGENT} is not allowed to fetch {curr}, not loading more links from here")
-            self.__handled.append(curr)
-            return curr
+            self._handled.append(curr)
+            return Page(url=curr, links=[], status=0)
 
-        if self.__counter > 0 and self.crawl_delay > 0:
+        if self._counter > 0 and self.crawl_delay > 0:
             logger.info(f"Waiting... {str(self.crawl_delay)}s")
             await sleep(self.crawl_delay)
 
-        if curr == self.__robots_path:
+        if curr == self._robots_path:
             self.load_robots_txt()
-            return curr
+            return Page(url=curr, status=200, links=[])
 
-        self.__counter += 1
-        self.__handled.append(curr)
+        self._counter += 1
+        self._handled.append(curr)
         try:
-            await self.load_more_links(curr)
-            return curr
-        except:
-            logger.error(f"Failed to proccess page links for page {curr}")
+            page = await self.load_more_links(curr)
+            return page
+        except Exception as e:
+            logger.error(
+                f"Failed to proccess page links for page {curr}, error: {repr(e)}")
             return None

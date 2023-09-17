@@ -2,7 +2,7 @@ from csv import DictWriter
 from spider import crawl_page_links, WebCrawler
 import logger
 import asyncio
-
+import db
 links_dict = []
 
 
@@ -17,19 +17,14 @@ async def collect_links(target_page: str):
 
 async def main():
     logger.use_date_time_logger()
-    async for page in WebCrawler("http://quotes.toscrape.com", 5, 0):
-        logger.info(f"On page {page}")
-    return
-    await web_iterator("http://quotes.toscrape.com", collect_links)
-    if len(links_dict) == 0:
-        return
-    keys = links_dict[0].keys()
-    return
-    with open("links-data.csv", "w", newline="") as output_file:
-        writer = DictWriter(output_file, keys)
-        writer.writeheader()
-        writer.writerows(links_dict)
-        logger.info(f"File written at {output_file.name}")
+    logger.info("START")
+    pages = []
+    async for page in WebCrawler("http://quotes.toscrape.com", 20, 0):
+        logger.info(f"On page {page.path}")
+        pages.append(page)
+    dbClient = db.DBClient()
+    await dbClient.put_pages(pages)
+    logger.info("END")
 
 if __name__ == "__main__":
     asyncio.run(main())
