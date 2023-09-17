@@ -26,18 +26,18 @@ class DBClient:
     @staticmethod
     async def _put_pages(tx: AsyncManagedTransaction, pages: list[Page]):
         result = await tx.run("""
-											WITH $pages as pages
-											UNWIND pages as item
-											MERGE (p:PAGE {url:item.url})
-											ON CREATE
-												SET p.path=item.path
-												SET p.url=item.url
-												SET p.domain=item.domain
-												SET p.scheme=item.scheme
-												SET p.status=item.status
-												SET p.params=item.params
-											RETURN p
-											""", pages=[page.__dict__ for page in pages])
+                                WITH $pages as pages
+                                UNWIND pages as item
+                                MERGE (p:PAGE {url:item.url})
+                                ON CREATE
+                                    SET p.path=item.path
+                                    SET p.url=item.url
+                                    SET p.domain=item.domain
+                                    SET p.scheme=item.scheme
+                                    SET p.status=item.status
+                                    SET p.params=item.params
+                                RETURN p
+                            """, pages=[page.__dict__ for page in pages])
         data = await result.data()
         return data
 
