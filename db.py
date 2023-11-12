@@ -53,10 +53,10 @@ class DBClient:
 
 async def main():
     greeter = DBClient()
-    await greeter.put_pages([Page(url="https://www.eportugal.pt", status=200, links=["https://www.eportugal.pt/path"]),
-                             Page(url="https://www.eportugal.pt/path", status=200,
-                                  links=["https://www.eportugal.pt/path/child"]),
-                             Page(url="https://www.eportugal.pt/path/child", status=200, links=[])])
+    await greeter.put_pages([Page(url="https://books.toscrape.com/", status=200, links=["https://books.toscrape.com/path"]),
+                             Page(url="https://books.toscrape.com/path", status=200,
+                                  links=["https://books.toscrape.com/path/child"]),
+                             Page(url="https://books.toscrape.com/path/child", status=200, links=[])])
     await greeter.close()
 if __name__ == "__main__":
     asyncio.run(main())
